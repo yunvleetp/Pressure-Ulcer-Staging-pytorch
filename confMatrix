@@ -1,0 +1,180 @@
+
+import monai
+import argparse
+import os
+import tqdm
+from torch.autograd import Variable
+import torch
+import numpy as np
+from pathlib import Path
+import pandas as pd
+import monai.transforms as T
+from monai.data import Dataset, DataLoader, PILReader
+
+
+def getDataDict(dataPath, fold, lbl=1, test=False, aug=False, low=False, high=False, class7=False):
+    dPath = Path(dataPath)
+    if lbl:
+        labTable = pd.read_excel("/send/fdgClass/pp/sevJoint_0903_class.xlsx",engine='openpyxl')
+
+#     elif lbl==0: # lbl=0 if using label based on the clinical diagnosis
+#         labTable = pd.read_csv()
+    # kmeans label 말고 AD/CN/MCI label로 교체66
+
+    dictList = list()
+    if test:
+        if low: testSbj = list(labTable[(labTable.l_fold == fold) & (labTable["4class"] == 0)].imageID)
+        elif high: testSbj = list(labTable[(labTable.h_fold == fold) & (labTable["4class"] ==1)].imageID)
+        elif class7: testSbj = list(labTable[labTable["7fold"] == fold].imageID)
+        else: testSbj = list(labTable[labTable.fold == fold].imageID)
+        for sbj in testSbj:
+            sPath = dPath / str(sbj + ".jpg")
+            _dict = dict()
+            _dict["img"] = sPath
+            if low: _dict['lbl']=int(list(labTable[labTable.imageID == sbj]["Grade"])[0])-1
+            elif high: _dict['lbl']=int(list(labTable[labTable.imageID == sbj]["Grade"])[0])-3
+            elif class7: _dict["lbl"]=int(list(labTable[labTable.imageID == sbj]["7class"])[0])
+            else: _dict["lbl"]=int(list(labTable[labTable.imageID == sbj]["4class"])[0])
+            dictList.append(_dict)
+        
+    else:
+        if low: trainSbj = list(labTable[(labTable.l_fold != fold) & (labTable["4class"] == 0)].imageID)
+        elif high: trainSbj = list(labTable[(labTable.h_fold != fold) & (labTable["4class"] ==1)].imageID)
+        elif class7: trainSbj = list(labTable[labTable["7fold"] != fold].imageID)
+        else: trainSbj = list(labTable[labTable.fold != fold].imageID)
+        for sbj in trainSbj:
+            sPath = dPath / str(sbj + ".jpg")
+            _dict = dict()
+            _dict["img"] = sPath
+            if low: _dict['lbl']=int(list(labTable[labTable.imageID == sbj]["Grade"])[0])-1
+            elif high: _dict['lbl']=int(list(labTable[labTable.imageID == sbj]["Grade"])[0])-3
+            elif class7: _dict["lbl"]=int(list(labTable[labTable.imageID == sbj]["7class"])[0])
+            else: _dict["lbl"]=int(list(labTable[labTable.imageID == sbj]["4class"])[0])
+            dictList.append(_dict)
+    
+    return dictList
+    
+def loadData(dataroot, batch_size, fold, size, aug=False, test=False, low=False, high=False, class7=False):
+    dataDict = getDataDict(dataroot, fold, aug= aug, test=test, low=low, high=high, class7=class7)
+    if not test:
+        if aug:
+            transform = T.Compose(
+                [
+                    T.LoadImaged(keys=['img']),
+                    T.EnsureChannelFirstd(keys=['img']),
+                    T.Resized(['img'],[size, size]),
+                    T.ScaleIntensityd(keys=['img']),
+                    # T.AddChanneld(keys=['img']),
+                    # # T.Resized(['img'],256),
+                    # T.ScaleIntensityd(keys=['img']),
+                    # T.Orientationd(keys=["fdgx", "syn"], axcodes="RAS"),
+                    T.RandAffined(keys=['img'], prob=0.5, translate_range=10), 
+                    T.RandRotated(keys=['img'], prob=0.5, range_x=30.0),
+                    T.RandGaussianNoised(keys=['img'], prob=0.5),
+                    T.EnsureTyped(keys=['img']),
+                ]
+            )
+        else: 
+            transform = T.Compose(
+                [
+                    T.LoadImaged(keys=['img']),
+                    T.EnsureChannelFirstd(keys=['img']),
+                    T.Resized(['img'],[size, size]),
+                    T.ScaleIntensityd(keys=['img']),
+                    T.EnsureTyped(keys=['img']),
+                ]
+            )
+        
+    else: 
+        transform = T.Compose(
+            [
+                T.LoadImaged(keys=['img']),
+                T.EnsureChannelFirstd(keys=['img']),
+                T.Resized(['img'],[size, size]),
+                T.ScaleIntensityd(keys=['img']),
+                T.EnsureTyped(keys=['img']),
+            ]
+        )
+
+    
+    dataset= Dataset(  # use imageDataSet or DataSet need to look at difference
+        data=dataDict,
+        transform=transform,
+    )
+
+    dataloader= DataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=40,
+        drop_last = False
+        
+    )
+
+    return dataloader
+def load_network(network, log_dir, network_label, epoch_label):
+        save_filename = '%s_%s.pth' % (network_label,epoch_label)
+        save_path = os.path.join(log_dir, save_filename)
+        network.load_state_dict(torch.load(save_path))
+
+all_preds = torch.tensor([])
+target = np.empty(0)
+
+maxk = max((1,2))
+for fold in range(10):
+# opt  = classOptions().parser_args(args=['--gpu_ids', '0,1,2,3', '--dataroot', '/send/linkCycData128_seg', '--synPath', '/send/syn/snormClass/400', '--checkpoints_dir', \
+#                                   '/send/logClass2', '--input_nc' '2', '--output_nc', '3', '--syn', '--name', 'syn_SeRext101_0', '--fold', '0', '--batchSize', '1', \
+    #                                   '--model', 'SEResNext101'])
+    opt = argparse.Namespace(gpu_ids=[0], dataroot = "/send/fdgClass/pp/sevJoint", checkpoints_dir= \
+                                    "/send/fdgClass/pp/log", input_nc=3 , output_nc = 7, name =f"7class_{fold}_balanced" ,fold = fold , batchSize=64, \
+                                    model = 'SEResNext101', class7= True, depthSize=512, low= False, high=False)
+
+    val_data = loadData(opt.dataroot, opt.batchSize, opt.fold, opt.depthSize, test=True, low=opt.low, high=opt.high, class7=opt.class7)
+    model = monai.networks.nets.SEResNext101(spatial_dims=2, in_channels=opt.input_nc, num_classes=opt.output_nc, pretrained=True).to(opt.gpu_ids[0])
+    model = torch.nn.DataParallel(model, opt.gpu_ids)
+    log_dir = os.path.join(opt.checkpoints_dir, opt.name)
+    load_network(model, log_dir, opt.name, 'acc')
+
+    model.eval()
+
+    # num_correct = 0.0
+    # metric_count = 0
+    # epoch_loss = 0 
+    # step = 0 
+    # train_preds = get_all_preds(model, val_data)
+    for i, batch_data in tqdm.tqdm(enumerate(val_data)):
+        # pdb.set_trace()
+        # step += 1
+        inputTensor = batch_data['img']
+        labels = Variable(batch_data['lbl'].type(torch.cuda.LongTensor))
+        with torch.no_grad():
+            preds = model(inputTensor)
+        all_preds = torch.cat(
+            (all_preds, preds.detach().cpu())
+            ,dim=0
+        )
+        target = np.append(target, labels.detach().cpu().numpy().flatten(), axis =0)
+    # print(all_preds)
+target = target.flatten()
+target = target.flatten()
+train_preds2 = all_preds.argmax(dim=1).numpy()
+# _, train_preds3 = all_preds.topk(maxk, 1, True, True)
+print(train_preds2, target)
+from sklearn import metrics
+# _genPred=model.predict_generator(test_generator)
+# genPred = train_preds.argmax(dim=1)
+
+# print(test_generator.class_indices)
+# print(test_generator.classes)
+# genPred=np.argmax(_genPred, axis=1)
+# print(genPred)
+
+score = metrics.accuracy_score(target, train_preds2)
+fpr, tpr, thresholds = metrics.roc_curve(target, train_preds2, pos_label=1)
+print(metrics.auc(fpr, tpr))
+print("final accuracy:{}".format(score))
+
+# print(metrics.classification_report(target,train_preds2, target_names=['low risk', 'high risk', 'DTI & Unstage', 'others']))
+print(metrics.classification_report(target,train_preds2, target_names=['Unstageable', 'class 1', 'class 2', 'class 3', 'class 4', 'DTI', 'others']))
+print("Top-2 accuracy: ",metrics.top_k_accuracy_score(target, all_preds, k=2))
+print("Top-3 accuracy: ", metrics.top_k_accuracy_score(target, all_preds, k=3))
