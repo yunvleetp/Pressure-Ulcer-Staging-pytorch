@@ -1,6 +1,6 @@
 # **Pressure-Ulcer-Staging-pytorch**
 
-![Untitled](MarkDown%20![Untitled](https://github.com/yunvleetp/Pressure-Ulcer-Staging-pytorch/assets/49764894/c4489a25-9525-415f-823b-03b2409359bd)
+![Untitled](https://github.com/yunvleetp/Pressure-Ulcer-Staging-pytorch/assets/49764894/c4489a25-9525-415f-823b-03b2409359bd)
 
 - A convolutional neural network (CNN) model was developed to classify **pressure injuries and related dermatoses** using 3,098 clinical images.
 - The study investigated whether implementing the CNN could improve initial pressure injury classification decisions made by physicians.
